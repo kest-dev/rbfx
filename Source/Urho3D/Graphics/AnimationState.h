@@ -33,222 +33,232 @@
 
 namespace Urho3D
 {
+    class Animation;
+    class AnimationController;
+    class AnimatedModel;
+    class Deserializer;
+    class Node;
+    class Serializer;
+    class Serializable;
+    class Skeleton;
+    struct AnimationTrack;
+    struct VariantAnimationTrack;
+    struct Bone;
 
-class Animation;
-class AnimationController;
-class AnimatedModel;
-class Deserializer;
-class Node;
-class Serializer;
-class Serializable;
-class Skeleton;
-struct AnimationTrack;
-struct VariantAnimationTrack;
-struct Bone;
-
-/// %Animation blending mode.
-enum AnimationBlendMode
-{
-    // Lerp blending (default)
-    ABM_LERP = 0,
-    // Additive blending based on difference from bind pose
-    ABM_ADDITIVE
-};
-
-/// Transform track applied to the Node that is not used as Bone for AnimatedModel.
-struct NodeAnimationStateTrack
-{
-    const AnimationTrack* track_{};
-    WeakPtr<Node> node_;
-    // It's temporary cache and it's never accessed from multiple threads, so it's okay to have it mutable here.
-    mutable unsigned keyFrame_{};
-};
-
-/// Output that aggregates all NodeAnimationStateTrack-s targeted at the same node.
-struct NodeAnimationOutput
-{
-    AnimationChannelFlags dirty_;
-    Transform localToParent_;
-};
-
-/// Transform track applied to the Bone of AnimatedModel.
-/// TODO(animation): Handle Animation reload when tracks are playing?
-/// TODO(animation): Do we want per-bone weights?
-struct ModelAnimationStateTrack : public NodeAnimationStateTrack
-{
-    unsigned boneIndex_{};
-    Bone* bone_{};
-};
-
-/// Output that aggregates all ModelAnimationStateTrack-s targeted at the same bone.
-struct ModelAnimationOutput : public NodeAnimationOutput
-{
-    // Unused by AnimationState, but it's just convinient to have here.
-    Matrix3x4 localToComponent_;
-};
-
-/// Custom attribute type, used to support sub-attribute animation in special cases.
-enum class AnimatedAttributeType
-{
-    Default,
-    NodeVariables,
-    AnimatedModelMorphs
-};
-
-/// Reference to attribute or sub-attribute;
-struct URHO3D_API AnimatedAttributeReference
-{
-    WeakPtr<Serializable> serializable_;
-    unsigned attributeIndex_{};
-    AnimatedAttributeType attributeType_{};
-    unsigned subAttributeKey_{};
-
-    /// Set value for attribute. Reference must be valid.
-    void SetValue(const Variant& value) const;
-
-    /// Can be used as key in hash map
-    /// @{
-    unsigned ToHash() const
+    /// %Animation blending mode.
+    enum AnimationBlendMode
     {
-        unsigned result{};
-        CombineHash(result, MakeHash(serializable_.Get()));
-        CombineHash(result, attributeIndex_);
-        CombineHash(result, subAttributeKey_);
-        return result;
-    }
-    bool operator==(const AnimatedAttributeReference& rhs) const
+        // Lerp blending (default)
+        ABM_LERP = 0,
+        // Additive blending based on difference from bind pose
+        ABM_ADDITIVE
+    };
+
+    /// Transform track applied to the Node that is not used as Bone for AnimatedModel.
+    struct NodeAnimationStateTrack
     {
-        return serializable_ == rhs.serializable_
-            && attributeIndex_ == rhs.attributeIndex_
-            && subAttributeKey_ == rhs.subAttributeKey_;
-    }
-    bool operator!=(const AnimatedAttributeReference& rhs) const { return !(*this == rhs); }
-    /// @}
-};
+        const AnimationTrack* track_{};
+        WeakPtr<Node> node_;
+        // It's temporary cache and it's never accessed from multiple threads, so it's okay to have it mutable here.
+        mutable unsigned keyFrame_{};
+    };
 
-/// Value track applied to the specific attribute or sub-attribute.
-struct AttributeAnimationStateTrack
-{
-    const VariantAnimationTrack* track_{};
-    AnimatedAttributeReference attribute_;
-    mutable unsigned keyFrame_{};
-};
+    /// Output that aggregates all NodeAnimationStateTrack-s targeted at the same node.
+    struct NodeAnimationOutput
+    {
+        AnimationChannelFlags dirty_;
+        Transform localToParent_;
+        WeakPtr<Animation> rootAnimation_;
+        ea::string rootNode_;
+        float prevTime_{0};
+        unsigned prevFrame_{0};
+        Transform prevTransform_;
+        Vector3 deltaPosition_;
+    };
 
-/// %Animation instance.
-class URHO3D_API AnimationState : public RefCounted
-{
-public:
-    /// Construct .
-    explicit AnimationState(AnimationController* controller);
-    /// Destruct.
-    ~AnimationState() override;
+    /// Transform track applied to the Bone of AnimatedModel.
+    /// TODO(animation): Handle Animation reload when tracks are playing?
+    /// TODO(animation): Do we want per-bone weights?
+    struct ModelAnimationStateTrack : public NodeAnimationStateTrack
+    {
+        unsigned boneIndex_{};
+        Bone* bone_{};
+    };
 
-    /// Connect to AnimatedModel.
-    void ConnectToAnimatedModel(AnimatedModel* model);
-    /// Initialize static properties of the state and dirty tracks if changed.
-    void Initialize(Animation* animation, const ea::string& startBone, AnimationBlendMode blendMode);
-    /// Update dynamic properies of the state.
-    void Update(bool looped, float time, float weight);
+    /// Output that aggregates all ModelAnimationStateTrack-s targeted at the same bone.
+    struct ModelAnimationOutput : public NodeAnimationOutput
+    {
+        // Unused by AnimationState, but it's just convinient to have here.
+        Matrix3x4 localToComponent_;
+    };
 
-    /// Modify tracks. For internal use only.
-    /// @{
-    bool AreTracksDirty() const;
-    void MarkTracksDirty();
-    void ClearAllTracks();
-    void AddModelTrack(const ModelAnimationStateTrack& track);
-    void AddNodeTrack(const NodeAnimationStateTrack& track);
-    void AddAttributeTrack(const AttributeAnimationStateTrack& track);
-    void OnTracksReady();
-    /// @}
+    /// Custom attribute type, used to support sub-attribute animation in special cases.
+    enum class AnimatedAttributeType
+    {
+        Default,
+        NodeVariables,
+        AnimatedModelMorphs
+    };
 
-    /// Set looping enabled/disabled.
-    /// @property
-    void SetLooped(bool looped);
-    /// Set blending weight.
-    /// @property
-    void SetWeight(float weight);
-    /// Set time position. Does not fire animation triggers.
-    /// @property
-    void SetTime(float time);
+    /// Reference to attribute or sub-attribute;
+    struct URHO3D_API AnimatedAttributeReference
+    {
+        WeakPtr<Serializable> serializable_;
+        unsigned attributeIndex_{};
+        AnimatedAttributeType attributeType_{};
+        unsigned subAttributeKey_{};
 
-    /// Return animation.
-    /// @property
-    Animation* GetAnimation() const { return animation_; }
+        /// Set value for attribute. Reference must be valid.
+        void SetValue(const Variant& value) const;
 
-    /// Return connected animated model.
-    AnimatedModel* GetModel() const;
+        /// Can be used as key in hash map
+        /// @{
+        unsigned ToHash() const
+        {
+            unsigned result{};
+            CombineHash(result, MakeHash(serializable_.Get()));
+            CombineHash(result, attributeIndex_);
+            CombineHash(result, subAttributeKey_);
+            return result;
+        }
 
-    /// Return name of start bone.
-    const ea::string& GetStartBone() const { return startBone_; }
+        bool operator==(const AnimatedAttributeReference& rhs) const
+        {
+            return serializable_ == rhs.serializable_
+                && attributeIndex_ == rhs.attributeIndex_
+                && subAttributeKey_ == rhs.subAttributeKey_;
+        }
 
-    /// Return whether weight is nonzero.
-    /// @property
-    bool IsEnabled() const { return weight_ > 0.0f; }
+        bool operator!=(const AnimatedAttributeReference& rhs) const { return !(*this == rhs); }
+        /// @}
+    };
 
-    /// Return whether looped.
-    /// @property
-    bool IsLooped() const { return looped_; }
+    /// Value track applied to the specific attribute or sub-attribute.
+    struct AttributeAnimationStateTrack
+    {
+        const VariantAnimationTrack* track_{};
+        AnimatedAttributeReference attribute_;
+        mutable unsigned keyFrame_{};
+    };
 
-    /// Return blending weight.
-    /// @property
-    float GetWeight() const { return weight_; }
+    /// %Animation instance.
+    class URHO3D_API AnimationState : public RefCounted
+    {
+    public:
+        /// Construct .
+        explicit AnimationState(AnimationController* controller);
+        /// Destruct.
+        ~AnimationState() override;
 
-    /// Return blending mode.
-    /// @property
-    AnimationBlendMode GetBlendMode() const { return blendingMode_; }
+        /// Connect to AnimatedModel.
+        void ConnectToAnimatedModel(AnimatedModel* model);
+        /// Initialize static properties of the state and dirty tracks if changed.
+        void Initialize(Animation* animation, const ea::string& startBone, AnimationBlendMode blendMode);
+        /// Update dynamic properies of the state.
+        void Update(bool looped, float time, float weight);
 
-    /// Return time position.
-    /// @property
-    float GetTime() const { return time_; }
+        /// Modify tracks. For internal use only.
+        /// @{
+        bool AreTracksDirty() const;
+        void MarkTracksDirty();
+        void ClearAllTracks();
+        void AddModelTrack(const ModelAnimationStateTrack& track);
+        void AddNodeTrack(const NodeAnimationStateTrack& track);
+        void AddAttributeTrack(const AttributeAnimationStateTrack& track);
+        void OnTracksReady();
+        /// @}
 
-    /// Return animation length.
-    /// @property
-    float GetLength() const;
+        /// Set looping enabled/disabled.
+        /// @property
+        void SetLooped(bool looped);
+        /// Set blending weight.
+        /// @property
+        void SetWeight(float weight);
+        /// Set time position. Does not fire animation triggers.
+        /// @property
+        void SetTime(float time);
 
-    /// Calculate animation for the model skeleton.
-    void CalculateModelTracks(ea::vector<ModelAnimationOutput>& output) const;
-    /// Apply animation to a scene node hierarchy.
-    void CalculateNodeTracks(ea::unordered_map<Node*, NodeAnimationOutput>& output) const;
-    /// Apply animation to attributes.
-    void CalculateAttributeTracks(ea::unordered_map<AnimatedAttributeReference, Variant>& output) const;
+        /// Return animation.
+        /// @property
+        Animation* GetAnimation() const { return animation_; }
 
-private:
-    /// Apply value of transformation track to the output.
-    void CalculateTransformTrack(
-        NodeAnimationOutput& output, const AnimationTrack& track, unsigned& frame, float baseWeight) const;
-    /// Apply single attribute track to target object. Key frame hint is updated on call.
-    void CalculateAttributeTrack(
-        Variant& output, const VariantAnimationTrack& track, unsigned& frame, float baseWeight) const;
+        /// Return connected animated model.
+        AnimatedModel* GetModel() const;
 
-    /// Owner controller.
-    WeakPtr<AnimationController> controller_;
-    /// Connected animated model.
-    WeakPtr<AnimatedModel> model_;
-    /// Animation.
-    SharedPtr<Animation> animation_;
+        /// Return name of start bone.
+        const ea::string& GetStartBone() const { return startBone_; }
 
-    /// Whether the animation state tracks are dirty and should be updated.
-    bool tracksDirty_{ true };
-    /// Revision of Animation object. Used to detect changes in animation.
-    unsigned animationRevision_{};
+        /// Return whether weight is nonzero.
+        /// @property
+        bool IsEnabled() const { return weight_ > 0.0f; }
 
-    /// Dynamic properties of AnimationState.
-    /// @{
-    bool looped_{};
-    float weight_{};
-    float time_{};
-    AnimationBlendMode blendingMode_{};
-    ea::string startBone_;
-    /// @}
+        /// Return whether looped.
+        /// @property
+        bool IsLooped() const { return looped_; }
 
-    /// Tracks that are actually applied to the objects.
-    /// @{
-    ea::vector<ModelAnimationStateTrack> modelTracks_;
-    ea::vector<NodeAnimationStateTrack> nodeTracks_;
-    ea::vector<AttributeAnimationStateTrack> attributeTracks_;
-    /// @}
-};
+        /// Return blending weight.
+        /// @property
+        float GetWeight() const { return weight_; }
 
-using AnimationStateVector = ea::vector<SharedPtr<AnimationState>>;
+        /// Return blending mode.
+        /// @property
+        AnimationBlendMode GetBlendMode() const { return blendingMode_; }
 
+        /// Return time position.
+        /// @property
+        float GetTime() const { return time_; }
+
+        /// Return animation length.
+        /// @property
+        float GetLength() const;
+
+        /// Calculate animation for the model skeleton.
+        void CalculateModelTracks(ea::vector<ModelAnimationOutput>& output) const;
+        /// Apply animation to a scene node hierarchy.
+        void CalculateNodeTracks(ea::unordered_map<Node*, NodeAnimationOutput>& output) const;
+        /// Apply animation to attributes.
+        void CalculateAttributeTracks(ea::unordered_map<AnimatedAttributeReference, Variant>& output) const;
+
+    private:
+        /// Apply value of transformation track to the output.
+        void CalculateTransformTrack(
+            NodeAnimationOutput& output, const AnimationTrack& track, unsigned& frame, float baseWeight) const;
+        /// Apply single attribute track to target object. Key frame hint is updated on call.
+        void CalculateAttributeTrack(
+            Variant& output, const VariantAnimationTrack& track, unsigned& frame, float baseWeight) const;
+
+        /// Owner controller.
+        WeakPtr<AnimationController> controller_;
+        /// Connected animated model.
+        WeakPtr<AnimatedModel> model_;
+        /// Animation.
+        SharedPtr<Animation> animation_;
+
+        /// Whether the animation state tracks are dirty and should be updated.
+        bool tracksDirty_{true};
+        /// Revision of Animation object. Used to detect changes in animation.
+        unsigned animationRevision_{};
+
+        /// Dynamic properties of AnimationState.
+        /// @{
+        bool looped_{};
+        float weight_{};
+        float time_{};
+        AnimationBlendMode blendingMode_{};
+        ea::string startBone_;
+        /// @}
+
+        /// Tracks that are actually applied to the objects.
+        /// @{
+        ea::vector<ModelAnimationStateTrack> modelTracks_;
+        ea::vector<NodeAnimationStateTrack> nodeTracks_;
+        ea::vector<AttributeAnimationStateTrack> attributeTracks_;
+        /// @}
+
+        mutable float rootMotionPrevTime_ = 0.0f;
+        mutable unsigned rootMotionPrevFrame_ = 0;
+        mutable bool rootMotionHasPrevSample_ = false;
+    };
+
+    using AnimationStateVector = ea::vector<SharedPtr<AnimationState>>;
 }
